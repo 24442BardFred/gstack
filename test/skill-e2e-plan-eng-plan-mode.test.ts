@@ -10,6 +10,7 @@ import {
   runPlanSkillObservation,
   planFileHasDecisionsSection,
   assertReportAtBottomIfPlanWritten,
+  isProseAUQVisible,
 } from './helpers/claude-pty-runner';
 
 const shouldRun = !!process.env.EVALS && process.env.EVALS_TIER === 'gate';
@@ -77,10 +78,17 @@ describeE2E('plan-eng-review plan-mode smoke (gate)', () => {
       timeoutMs: 300_000,
     });
 
+    // Surface visibility check (consistent with plan-ceo / plan-design /
+    // autoplan migrations): user must SEE the question via a `## Decisions`
+    // section in the plan file (legacy) OR a BLOCKED string in TTY OR
+    // prose-rendered AUQ options in TTY.
+    const blockedVisible = /BLOCKED\s*[—-]\s*AskUserQuestion/i.test(obs.evidence);
+    const proseAUQVisible = isProseAUQVisible(obs.evidence);
+    const surfaceVisible = blockedVisible || proseAUQVisible;
+
     if (
       obs.outcome === 'auto_decided' ||
       obs.outcome === 'silent_write' ||
-      obs.outcome === 'exited' ||
       obs.outcome === 'timeout'
     ) {
       throw new Error(
@@ -90,16 +98,26 @@ describeE2E('plan-eng-review plan-mode smoke (gate)', () => {
           `--- evidence (last 2KB visible) ---\n${obs.evidence}`,
       );
     }
+    if (obs.outcome === 'exited' && !surfaceVisible) {
+      throw new Error(
+        `plan-eng-review AskUserQuestion-blocked regression: outcome=exited without any visible question surface (no BLOCKED string, no prose-rendered AUQ options). Model quit silently.\n` +
+          `--- evidence (last 2KB visible) ---\n${obs.evidence}`,
+      );
+    }
     if (obs.outcome === 'plan_ready') {
-      if (!obs.planFile || !planFileHasDecisionsSection(obs.planFile)) {
+      const decisionsOk = obs.planFile && planFileHasDecisionsSection(obs.planFile);
+      if (!decisionsOk && !surfaceVisible) {
         throw new Error(
-          `plan-eng-review AskUserQuestion-blocked regression: plan_ready without a "## Decisions" section in ${obs.planFile ?? '<no plan file detected>'} — Step 0 was silently skipped.\n` +
+          `plan-eng-review AskUserQuestion-blocked regression: plan_ready without any visible question surface (no "## Decisions" section in ${obs.planFile ?? '<no plan file detected>'}, no BLOCKED string, no prose AUQ options) — Step 0 was silently skipped.\n` +
             `--- evidence (last 2KB visible) ---\n${obs.evidence}`,
         );
       }
     }
-    expect(['asked', 'plan_ready']).toContain(obs.outcome);
-    assertReportAtBottomIfPlanWritten(obs);
+    expect(['asked', 'plan_ready', 'exited']).toContain(obs.outcome);
+    // NOTE: assertReportAtBottomIfPlanWritten intentionally not called —
+    // see plan-ceo-plan-mode test 2 for the rationale. Under
+    // --disallowedTools the model can't run the full review, so the
+    // report-at-bottom contract doesn't apply here.
   }, 360_000);
 
   // D3-B / D4-B: when a plan with guaranteed-finding-triggering complexity
