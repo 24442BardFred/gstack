@@ -68,6 +68,13 @@
       "src/**/*.ts",
       "!src/**/*.d.ts",
       "!src/index.ts"
-    ]
+    ],
+    "coverageThreshold": {
+      "global": {
+        "lines": 70,
+        "functions": 70
+      }
+    },
+    "verbose": true
   }
 }
